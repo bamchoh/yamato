@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"sync"
 
@@ -23,7 +24,7 @@ type Zipper struct {
 	b io.Writer
 }
 
-func (z *Zipper) Execute(path string) (err error) {
+func (z *Zipper) Execute(path string, ctx context.Context) (err error) {
 	cd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -38,20 +39,36 @@ func (z *Zipper) Execute(path string) (err error) {
 	zipWriter := zip.NewWriter(z.b)
 	defer zipWriter.Close()
 
-	eg, ctx := errgroup.WithContext(context.TODO())
+	errCh := make(chan error, len(files))
+	defer close(errCh)
+
+	eg := errgroup.Group{}
 	for _, s := range files {
 		eg.Go(func() error {
-			return z.addToZip(s, zipWriter, ctx)
+			child, cancel := context.WithCancel(ctx)
+			defer cancel()
+
+			go func() {
+				errCh <- z.addToZip(s, zipWriter)
+			}()
+
+			select {
+			case <-child.Done():
+				return child.Err()
+			case err := <-errCh:
+				return err
+			}
 		})
 	}
 
 	if err := eg.Wait(); err != nil {
+		log.Println(err)
 		return err
 	}
 	return nil
 }
 
-func (z *Zipper) addToZip(filename string, zipWriter *zip.Writer, ctx context.Context) error {
+func (z *Zipper) addToZip(filename string, zipWriter *zip.Writer) error {
 	fi, err := os.Stat(filename)
 	if err != nil {
 		return errors.Wrap(err, "isDir : os.Stat : ")
@@ -67,28 +84,18 @@ func (z *Zipper) addToZip(filename string, zipWriter *zip.Writer, ctx context.Co
 	}
 	defer src.Close()
 
-	errCh := make(chan error, 1)
-	go func() {
-		z.m.Lock()
-		defer z.m.Unlock()
+	z.m.Lock()
+	defer z.m.Unlock()
 
-		writer, err := zipWriter.Create(filename)
-		if err != nil {
-			errCh <- errors.Wrap(err, "[CREATE]")
-		}
-
-		_, err = io.Copy(writer, src)
-		if err != nil {
-			errCh <- errors.Wrap(err, fmt.Sprintf("[COPY](%s)", src.Name()))
-		}
-
-		errCh <- nil
-	}()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case err := <-errCh:
-		return err
+	writer, err := zipWriter.Create(filename)
+	if err != nil {
+		return errors.Wrap(err, "[CREATE]")
 	}
+
+	_, err = io.Copy(writer, src)
+	if err != nil {
+		return errors.Wrap(err, fmt.Sprintf("[COPY](%s)", src.Name()))
+	}
+
+	return nil
 }

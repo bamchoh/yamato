@@ -3,9 +3,12 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+
+	_ "net/http/pprof"
 )
 
 const (
@@ -25,6 +28,13 @@ const (
 )
 
 func main() {
+	l, err := net.Listen("tcp", ":0")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("Listening on %s\n", l.Addr())
+	go http.Serve(l, nil)
+
 	http.HandleFunc("/", handler)
 	http.ListenAndServe(":8080", nil)
 }
@@ -52,15 +62,18 @@ func defaultHandler(w http.ResponseWriter, r *http.Request, path string) {
 
 func zipHandler(w http.ResponseWriter, r *http.Request, path string) {
 	log.Println("Get request")
+	ctx := r.Context()
+
 	zipFilename := filepath.Base(path) + ".zip"
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", "attachment; filename="+zipFilename)
 	z := NewZipper(w)
 	log.Println("Start zipping")
-	err := z.Execute(path)
+	err := z.Execute(path, ctx)
 	if err != nil {
 		log.Println(err)
 	}
+
 	log.Println("End   zipping")
 }
 
