@@ -2,10 +2,10 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 )
 
 const (
@@ -51,13 +51,17 @@ func defaultHandler(w http.ResponseWriter, r *http.Request, path string) {
 }
 
 func zipHandler(w http.ResponseWriter, r *http.Request, path string) {
+	log.Println("Get request")
 	zipFilename := filepath.Base(path) + ".zip"
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", "attachment; filename="+zipFilename)
-	z := NewZipper()
-	z.Execute(path)
-	w.Write(z.Bytes())
-	runtime.GC()
+	z := NewZipper(w)
+	log.Println("Start zipping")
+	err := z.Execute(path)
+	if err != nil {
+		log.Println(err)
+	}
+	log.Println("End   zipping")
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {

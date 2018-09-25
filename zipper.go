@@ -2,7 +2,7 @@ package main
 
 import (
 	"archive/zip"
-	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -10,54 +10,48 @@ import (
 
 	zglob "github.com/mattn/go-zglob"
 	"github.com/pkg/errors"
+	"golang.org/x/sync/errgroup"
 )
 
-func NewZipper() *Zipper {
-	var buf []byte
+func NewZipper(w io.Writer) *Zipper {
 	m := new(sync.Mutex)
-	b := bytes.NewBuffer(buf)
-	return &Zipper{m, b}
+	return &Zipper{m, w}
 }
 
 type Zipper struct {
 	m *sync.Mutex
-	b *bytes.Buffer
+	b io.Writer
 }
 
-func (z *Zipper) Bytes() []byte {
-	return z.b.Bytes()
-}
-
-func (z *Zipper) Execute(path string) {
+func (z *Zipper) Execute(path string) (err error) {
 	cd, err := os.Getwd()
 	if err != nil {
-		panic(err)
+		return err
 	}
 	defer os.Chdir(cd)
 	os.Chdir(path)
 	files, err := zglob.Glob(`**\*`)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	zipWriter := zip.NewWriter(z.b)
 	defer zipWriter.Close()
 
-	wg := &sync.WaitGroup{}
+	eg, ctx := errgroup.WithContext(context.TODO())
 	for _, s := range files {
-		go func(filename string) {
-			wg.Add(1)
-			var err1 error
-			if err1 = z.addToZip(filename, zipWriter); err1 != nil {
-				panic(err1)
-			}
-			wg.Done()
-		}(s)
+		eg.Go(func() error {
+			return z.addToZip(s, zipWriter, ctx)
+		})
 	}
-	wg.Wait()
+
+	if err := eg.Wait(); err != nil {
+		return err
+	}
+	return nil
 }
 
-func (z *Zipper) addToZip(filename string, zipWriter *zip.Writer) error {
+func (z *Zipper) addToZip(filename string, zipWriter *zip.Writer, ctx context.Context) error {
 	fi, err := os.Stat(filename)
 	if err != nil {
 		return errors.Wrap(err, "isDir : os.Stat : ")
@@ -73,19 +67,28 @@ func (z *Zipper) addToZip(filename string, zipWriter *zip.Writer) error {
 	}
 	defer src.Close()
 
-	z.m.Lock()
+	errCh := make(chan error, 1)
+	go func() {
+		z.m.Lock()
+		defer z.m.Unlock()
 
-	writer, err := zipWriter.Create(filename)
-	if err != nil {
-		return errors.Wrap(err, "[CREATE]")
+		writer, err := zipWriter.Create(filename)
+		if err != nil {
+			errCh <- errors.Wrap(err, "[CREATE]")
+		}
+
+		_, err = io.Copy(writer, src)
+		if err != nil {
+			errCh <- errors.Wrap(err, fmt.Sprintf("[COPY](%s)", src.Name()))
+		}
+
+		errCh <- nil
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-errCh:
+		return err
 	}
-
-	_, err = io.Copy(writer, src)
-	if err != nil {
-		return errors.Wrap(err, fmt.Sprintf("[COPY](%s)", src.Name()))
-	}
-
-	z.m.Unlock()
-
-	return nil
 }
