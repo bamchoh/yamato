@@ -2,16 +2,13 @@ package main
 
 import (
 	"archive/zip"
-	"context"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"sync"
 
 	zglob "github.com/mattn/go-zglob"
 	"github.com/pkg/errors"
-	"golang.org/x/sync/errgroup"
 )
 
 func NewZipper(w io.Writer) *Zipper {
@@ -24,7 +21,7 @@ type Zipper struct {
 	b io.Writer
 }
 
-func (z *Zipper) Execute(path string, ctx context.Context) (err error) {
+func (z *Zipper) Execute(path string) (err error) {
 	cd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -39,33 +36,28 @@ func (z *Zipper) Execute(path string, ctx context.Context) (err error) {
 	zipWriter := zip.NewWriter(z.b)
 	defer zipWriter.Close()
 
-	errCh := make(chan error, len(files))
-	defer close(errCh)
-
-	eg := errgroup.Group{}
 	for _, s := range files {
-		eg.Go(func() error {
-			child, cancel := context.WithCancel(ctx)
-			defer cancel()
-
-			go func() {
-				errCh <- z.addToZip(s, zipWriter)
-			}()
-
-			select {
-			case <-child.Done():
-				return child.Err()
-			case err := <-errCh:
-				return err
-			}
-		})
-	}
-
-	if err := eg.Wait(); err != nil {
-		log.Println(err)
-		return err
+		if err := z.addToZip(s, zipWriter); err != nil {
+			return err
+		}
 	}
 	return nil
+	// eg := errgroup.Group{}
+	// for _, s := range files {
+	// 	eg.Go(func() error {
+	// 		defer func() {
+	// 			if err := recover(); err != nil {
+	// 				log.Println("[Zipper Goroutine]", err)
+	// 			}
+	// 		}()
+	// 		return z.addToZip(s, zipWriter)
+	// 	})
+	// }
+
+	// if err := eg.Wait(); err != nil {
+	// 	return err
+	// }
+	// return nil
 }
 
 func (z *Zipper) addToZip(filename string, zipWriter *zip.Writer) error {
