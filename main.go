@@ -61,14 +61,20 @@ func defaultHandler(w http.ResponseWriter, r *http.Request, path string) {
 }
 
 func zipHandler(w http.ResponseWriter, r *http.Request, path string) {
+	defer func() {
+		if err := recover(); err != nil {
+			log.Println(err)
+		}
+	}()
+
 	log.Println("Get request")
 
 	zipFilename := filepath.Base(path) + ".zip"
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", "attachment; filename="+zipFilename)
-	z := NewZipper(w)
+	z := &Zipper{}
 	log.Println("Start zipping")
-	err := z.Execute(path)
+	err := z.Execute(path, w)
 	if err != nil {
 		log.Println(err)
 	}

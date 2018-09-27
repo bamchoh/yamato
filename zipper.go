@@ -5,42 +5,40 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sync"
+	"runtime"
 
 	zglob "github.com/mattn/go-zglob"
 	"github.com/pkg/errors"
 )
 
-func NewZipper(w io.Writer) *Zipper {
-	m := new(sync.Mutex)
-	return &Zipper{m, w}
-}
-
 type Zipper struct {
-	m *sync.Mutex
-	b io.Writer
 }
 
-func (z *Zipper) Execute(path string) (err error) {
+func (z *Zipper) Execute(path string, w io.Writer) (err error) {
 	cd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	defer os.Chdir(cd)
+	defer func() {
+		os.Chdir(cd)
+		runtime.GC()
+	}()
 	os.Chdir(path)
+
 	files, err := zglob.Glob(`**\*`)
 	if err != nil {
 		return err
 	}
 
-	zipWriter := zip.NewWriter(z.b)
+	zipWriter := zip.NewWriter(w)
 	defer zipWriter.Close()
 
 	for _, s := range files {
-		if err := z.addToZip(s, zipWriter); err != nil {
+		if err = z.addToZip(s, zipWriter); err != nil {
 			return err
 		}
 	}
+
 	return nil
 	// eg := errgroup.Group{}
 	// for _, s := range files {
@@ -75,9 +73,6 @@ func (z *Zipper) addToZip(filename string, zipWriter *zip.Writer) error {
 		return err
 	}
 	defer src.Close()
-
-	z.m.Lock()
-	defer z.m.Unlock()
 
 	writer, err := zipWriter.Create(filename)
 	if err != nil {
